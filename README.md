@@ -6,9 +6,12 @@ daily API usage cost.
 
 Available for **OpenCode** and **Claude Code**.
 
----
+--
 
 ## OpenCode
+
+<img width="736" height="184" alt="image" src="https://github.com/user-attachments/assets/bd3a4e64-2988-460d-bbb7-e4d96b3c9a08" />
+
 
 ### Features
 
