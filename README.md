@@ -6,18 +6,19 @@ daily API usage cost.
 
 Available for **OpenCode** and **Claude Code**.
 
----
+--
 
 ## OpenCode
+
+<img width="736" height="184" alt="image" src="https://github.com/user-attachments/assets/bd3a4e64-2988-460d-bbb7-e4d96b3c9a08" />
+
 
 ### Features
 
 | Feature | Description |
 |---------|-------------|
-| **Tick loop** | Pet advances every 6 s via a background timer |
-| **Event hooks** | Reacts to file edits (coding reward), session idle, and server connect |
 | **`/codotchi` slash command** | Control your pet directly from OpenCode |
-| **ASCII art renderer** | 30 frames (6 stages × 5 moods), ANSI-coloured speech bubbles, status bars |
+| **ASCII art renderer** | ANSI-coloured speech bubbles, messages whilst you code |
 | **Daily cost tracking** | Pet speech bubble colour reflects today's OpenCode API spend |
 
 ### Installation
@@ -56,8 +57,6 @@ greet you in a speech bubble on first startup.
 | Feature | Description |
 |---------|-------------|
 | **Statusline pet** | Multiline ANSI ASCII art renders in the statusline, refreshes every 10 seconds |
-| **Coding rewards** | Every file write/edit boosts your pet's happiness and discipline |
-| **Session hooks** | Pet greets you on session start and says farewell when the session stops |
 | **`/codotchi` slash command** | Control your pet directly from Claude Code |
 | **Daily cost tracking** | Pet speech bubble colour reflects today's Claude API spend |
 
@@ -106,7 +105,7 @@ The pet's speech bubble colour reflects how much you've spent on API calls today
 | Warn → shout threshold | Yellow | Concerned |
 | Above shout threshold | Red | ALL CAPS alarm |
 
-Default thresholds: **$30 warn / $50 shout**. Configurable per plugin.
+Default thresholds: **$30 warn / $50 shout**. Configurable via `/codotchi warnthreshold` and `/codotchi shoutthreshold`.
 
 ---
 
