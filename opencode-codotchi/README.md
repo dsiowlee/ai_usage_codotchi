@@ -18,21 +18,21 @@ project. Choose the path that matches how you have the package:
 
 ### Option A — From zip (recommended)
 
-Download `opencode-codotchi-2.7.3.zip` from the
+Download `opencode-codotchi-2.11.0.zip` from the
 [Releases page](https://github.com/dylscoop/codotchi/releases), extract it,
 then run the installer:
 
 ```bash
 # macOS / Linux
-unzip opencode-codotchi-2.7.3.zip
-cd opencode-codotchi-2.7.3
+unzip opencode-codotchi-2.11.0.zip
+cd opencode-codotchi-2.11.0
 node bin/install.js --install
 ```
 
 ```powershell
 # Windows (PowerShell)
-Expand-Archive opencode-codotchi-2.7.3.zip
-cd opencode-codotchi-2.7.3
+Expand-Archive opencode-codotchi-2.11.0.zip
+cd opencode-codotchi-2.11.0
 node bin/install.js --install
 ```
 
@@ -97,6 +97,8 @@ codotchi will greet you in a speech bubble.
 /codotchi wake         — wake your pet up
 /codotchi clean        — clean up droppings
 /codotchi medicine     — give medicine to cure sickness
+/codotchi warnthreshold <amount>   — set the warn (yellow) daily USD threshold
+/codotchi shoutthreshold <amount>  — set the shout (red) daily USD threshold
 /codotchi show         — enable ASCII art display
 /codotchi hide         — disable ASCII art display
 /codotchi new_game name=<name> petType=<type>  — start a fresh pet
