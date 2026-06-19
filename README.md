@@ -14,9 +14,9 @@ Available for **OpenCode** and **Claude Code**.
 
 | Feature | Description |
 |---------|-------------|
-| **`/codotchi` slash command** |
-| **ASCII art renderer** |
-| **Daily cost tracking** |
+| **`/codotchi` slash command** | Control your pet directly from OpenCode |
+| **ASCII art renderer** | ANSI-coloured speech bubbles, messages whilst you code |
+| **Daily cost tracking** | Pet speech bubble colour reflects today's OpenCode API spend |
 
 ### Installation
 
@@ -53,9 +53,10 @@ greet you in a speech bubble on first startup.
 
 | Feature | Description |
 |---------|-------------|
-| **`/codotchi` slash command** |
-| **ASCII art renderer** |
-| **Daily cost tracking** |
+| **Statusline pet** | Multiline ANSI ASCII art renders in the statusline, refreshes every 10 seconds |
+| **`/codotchi` slash command** | Control your pet directly from Claude Code |
+| **Daily cost tracking** | Pet speech bubble colour reflects today's Claude API spend |
+
 ### Installation
 
 Download `claude-codotchi-2.10.2.zip` from the
