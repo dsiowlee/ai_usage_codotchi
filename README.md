@@ -3,7 +3,7 @@
 A Tamagotchi-style virtual pet that lives inside your AI coding assistant.
 Raises your pet in the terminal alongside your coding session and tracks your
 daily API usage cost.
-
+https://github.com/dsiowlee/ai_usage_codotchi/blob/main/README.md
 Available for **OpenCode** and **Claude Code**.
 
 ---
@@ -14,8 +14,6 @@ Available for **OpenCode** and **Claude Code**.
 
 | Feature | Description |
 |---------|-------------|
-| **Tick loop** | Pet advances every 6 s via a background timer |
-| **Event hooks** | Reacts to file edits (coding reward), session idle, and server connect |
 | **`/codotchi` slash command** | Control your pet directly from OpenCode |
 | **ASCII art renderer** | 30 frames (6 stages × 5 moods), ANSI-coloured speech bubbles, status bars |
 | **Daily cost tracking** | Pet speech bubble colour reflects today's OpenCode API spend |
