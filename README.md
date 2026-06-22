@@ -91,6 +91,16 @@ The script prints the two `/plugin` commands to paste into a Claude Code session
 /plugin install claude-codotchi
 ```
 
+**Can't run scripts? Skip the script entirely.** The script only exists to
+print the correct local path. If you know where you extracted the zip, open a
+Claude Code session and run these commands directly (substituting your actual
+path):
+
+```
+/plugin marketplace add C:\path\to\claude-codotchi-2.11.1
+/plugin install claude-codotchi
+```
+
 See `INSTALL.md` inside the zip for full installation details.
 
 ---

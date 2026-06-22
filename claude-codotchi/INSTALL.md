@@ -47,6 +47,15 @@ The script prints two lines like:
 /plugin install claude-codotchi
 ```
 
+**Can't run scripts?** The script only exists to print the correct local path.
+You can skip it entirely — open a Claude Code session and run the two commands
+directly, substituting the actual path to this directory:
+
+```
+/plugin marketplace add C:\path\to\claude-codotchi-X.Y.Z
+/plugin install claude-codotchi
+```
+
 ### Step 2 — Run the commands in Claude Code
 
 Open a Claude Code session and paste both commands in order.
