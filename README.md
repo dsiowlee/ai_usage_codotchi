@@ -3,7 +3,7 @@
 A Tamagotchi-style virtual pet that lives inside your AI coding assistant.
 Raises your pet in the terminal alongside your coding session and tracks your
 daily API usage cost.
-https://github.com/dsiowlee/ai_usage_codotchi/blob/main/README.md
+
 Available for **OpenCode** and **Claude Code**.
 
 ---
@@ -14,29 +14,31 @@ Available for **OpenCode** and **Claude Code**.
 
 | Feature | Description |
 |---------|-------------|
+| **Tick loop** | Pet advances every 6 s via a background timer |
+| **Event hooks** | Reacts to file edits (coding reward), session idle, and server connect |
 | **`/codotchi` slash command** | Control your pet directly from OpenCode |
 | **ASCII art renderer** | 30 frames (6 stages × 5 moods), ANSI-coloured speech bubbles, status bars |
 | **Daily cost tracking** | Pet speech bubble colour reflects today's OpenCode API spend |
 
 ### Installation
 
-Download `opencode-codotchi-2.11.1.zip` from the
+Download `opencode-codotchi-2.11.3.zip` from the
 [Releases page](https://github.com/dsiowlee/ai_usage_codotchi/releases),
 extract it, then run the installer:
 
 **Windows (PowerShell):**
 
 ```powershell
-Expand-Archive opencode-codotchi-2.11.1.zip
-cd opencode-codotchi-2.11.1
+Expand-Archive opencode-codotchi-2.11.3.zip
+cd opencode-codotchi-2.11.3
 node bin/install.js --install
 ```
 
 **macOS / Linux:**
 
 ```bash
-unzip opencode-codotchi-2.11.1.zip
-cd opencode-codotchi-2.11.1
+unzip opencode-codotchi-2.11.3.zip
+cd opencode-codotchi-2.11.3
 node bin/install.js --install
 ```
 
@@ -61,7 +63,7 @@ greet you in a speech bubble on first startup.
 
 ### Installation
 
-Download `claude-codotchi-2.11.1.zip` from the
+Download `claude-codotchi-2.11.3.zip` from the
 [Releases page](https://github.com/dsiowlee/ai_usage_codotchi/releases),
 extract it, then run the installer script to get the exact commands for your
 machine:
@@ -69,26 +71,23 @@ machine:
 **Windows (PowerShell):**
 
 ```powershell
-Expand-Archive claude-codotchi-2.11.1.zip
-cd claude-codotchi-2.11.1
+Expand-Archive claude-codotchi-2.11.3.zip
+cd claude-codotchi-2.11.3
 .\install.ps1
 ```
 
 **macOS / Linux:**
 
 ```bash
-unzip claude-codotchi-2.11.1.zip
-cd claude-codotchi-2.11.1
+unzip claude-codotchi-2.11.3.zip
+cd claude-codotchi-2.11.3
 chmod +x install.sh && ./install.sh
 ```
 
-**Can't run scripts? Skip the script entirely.** The script only exists to
-print the correct local path. If you know where you extracted the zip, open a
-Claude Code session and run these commands directly (substituting your actual
-path):
+The script prints the two `/plugin` commands to paste into a Claude Code session:
 
 ```
-/plugin marketplace add C:\path\to\claude-codotchi-2.11.1
+/plugin marketplace add <path-to-extracted-folder>
 /plugin install claude-codotchi
 ```
 
@@ -110,7 +109,7 @@ Default thresholds: **$30 warn / $50 shout**. Configurable per plugin.
 
 ---
 
-## Current release: v2.11.1
+## Current release: v2.11.3
 
-- `opencode-codotchi-2.11.1.zip` — OpenCode plugin
-- `claude-codotchi-2.11.1.zip` — Claude Code plugin
+- `opencode-codotchi-2.11.3.zip` — OpenCode plugin
+- `claude-codotchi-2.11.3.zip` — Claude Code plugin
