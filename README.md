@@ -84,13 +84,6 @@ cd claude-codotchi-2.11.1
 chmod +x install.sh && ./install.sh
 ```
 
-The script prints the two `/plugin` commands to paste into a Claude Code session:
-
-```
-/plugin marketplace add <path-to-extracted-folder>
-/plugin install claude-codotchi
-```
-
 **Can't run scripts? Skip the script entirely.** The script only exists to
 print the correct local path. If you know where you extracted the zip, open a
 Claude Code session and run these commands directly (substituting your actual
