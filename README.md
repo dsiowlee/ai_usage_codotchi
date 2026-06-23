@@ -14,11 +14,9 @@ Available for **OpenCode** and **Claude Code**.
 
 | Feature | Description |
 |---------|-------------|
-| **Tick loop** | Pet advances every 6 s via a background timer |
-| **Event hooks** | Reacts to file edits (coding reward), session idle, and server connect |
-| **`/codotchi` slash command** | Control your pet directly from OpenCode |
-| **ASCII art renderer** | 30 frames (6 stages × 5 moods), ANSI-coloured speech bubbles, status bars |
-| **Daily cost tracking** | Pet speech bubble colour reflects today's OpenCode API spend |
+| **Statusline pet** | Multiline ANSI ASCII art renders in the statusline, refreshes every 10 seconds |
+| **`/codotchi` slash command** | Control your pet directly from Claude Code |
+| **Daily cost tracking** | Pet speech bubble colour reflects today's Claude API spend |
 
 ### Installation
 
@@ -56,7 +54,6 @@ greet you in a speech bubble on first startup.
 | Feature | Description |
 |---------|-------------|
 | **Statusline pet** | Multiline ANSI ASCII art renders in the statusline, refreshes every 10 seconds |
-| **Coding rewards** | Every file write/edit boosts your pet's happiness and discipline |
 | **Session hooks** | Pet greets you on session start and says farewell when the session stops |
 | **`/codotchi` slash command** | Control your pet directly from Claude Code |
 | **Daily cost tracking** | Pet speech bubble colour reflects today's Claude API spend |
