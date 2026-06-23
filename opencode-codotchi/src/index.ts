@@ -40,6 +40,7 @@
 import * as fs   from "fs";
 import * as path from "path";
 import * as os   from "os";
+import { spawnSync } from "child_process";
 import { tool }  from "@opencode-ai/plugin";
 import type { Plugin, PluginInput } from "@opencode-ai/plugin";
 import { getIDEBase as _getIDEBase, resolveVSCodeStatePath } from "./statePathResolver.js";
@@ -209,11 +210,14 @@ function loadDailyUsage(): void {
     const raw = JSON.parse(fs.readFileSync(filePath, "utf8")) as { date?: string; costUSD?: number; tokens?: number };
     const today = todayUTC();
     if (raw.date === today) {
-      dailyCostUSD = typeof raw.costUSD === "number" ? raw.costUSD : 0;
-      dailyTokens  = typeof raw.tokens  === "number" ? raw.tokens  : 0;
-      dailyDate    = today;
+      // Store into sidecar vars only — do NOT pre-seed dailyCostUSD.
+      // backfillDailyUsage() will set dailyCostUSD from the authoritative SQLite
+      // DB (Track A). The sidecar value is only used as a floor when Track A
+      // fails and Track B is the sole source.
+      sidecarCostUSD = typeof raw.costUSD === "number" ? raw.costUSD : 0;
+      sidecarTokens  = typeof raw.tokens  === "number" ? raw.tokens  : 0;
     }
-    // If stored date differs it's a new day — keep zeroed defaults
+    // If stored date differs it's a new day — sidecar values stay zero
   } catch { /* best-effort */ }
 }
 
@@ -232,6 +236,9 @@ function checkDayRollover(): void {
     dailyCostUSD = 0;
     dailyTokens  = 0;
     dailyDate    = today;
+    sidecarCostUSD = 0;
+    sidecarTokens  = 0;
+    countedMessageIds.clear();
     // Daily reset for OpenCode-local pet — respawn with same name and message count
     if (localPetState !== null && localPetState.alive) {
       createLocalPet();
@@ -245,21 +252,132 @@ function checkDayRollover(): void {
 // ---------------------------------------------------------------------------
 
 /**
+ * Locate the opencode-cli binary by trying three candidate paths in order:
+ *   1. %LOCALAPPDATA%\opencode\opencode-cli.exe  (Windows installer)
+ *   2. ~/.local/share/opencode/opencode-cli      (Linux / Mac)
+ *   3. "opencode" on PATH                        (generic fallback)
+ * Returns the first path whose binary exits with status 0, or null if none found.
+ */
+function findOpencodeCli(): string | null {
+  const candidates: string[] = [
+    // Windows
+    ...(process.env.LOCALAPPDATA
+      ? [path.join(process.env.LOCALAPPDATA, "opencode", "opencode-cli.exe")]
+      : []),
+    // Linux / Mac
+    path.join(os.homedir(), ".local", "share", "opencode", "opencode-cli"),
+    // Generic PATH fallback (main opencode binary also has the `db` subcommand)
+    "opencode",
+  ];
+
+  for (const c of candidates) {
+    try {
+      if (c !== "opencode" && !fs.existsSync(c)) { continue; }
+      const result = spawnSync(c, ["--version"], { timeout: 2000, encoding: "utf8" });
+      if (result.status === 0) { return c; }
+    } catch { /* try next */ }
+  }
+  return null;
+}
+
+/**
  * On startup, the module-level dailyCostUSD / dailyTokens accumulators are
  * seeded from the sidecar file (which only records what was observed during
- * previous plugin runs). This async helper queries the OpenCode API for all
- * sessions that were active today and sums the cost + tokens across every
- * completed AssistantMessage, then replaces the sidecar values if the API
- * total is larger (to avoid double-counting live events already received).
+ * previous plugin runs). This async helper uses a two-track approach:
  *
- * It is called fire-and-forget from the plugin entry point so startup is
- * never delayed or blocked by API latency.
+ * Track A — SQLite direct query (cross-project, single source of truth):
+ *   Spawns the opencode-cli binary to run a SQL query against the OpenCode
+ *   database. Filters on individual message completion timestamps so that
+ *   cross-day sessions (started yesterday, still active today) are counted
+ *   correctly — only their today-messages are included. This gives the same
+ *   total as `opencode stats` and `agentsview usage statusline`.
+ *   The DB value is assigned directly — Math.max is NOT used — so that a
+ *   stale/inflated sidecar can never win over the authoritative DB total.
+ *
+ * Track B — API loop (current-project only, last-1h costEvents buffer):
+ *   Calls client.session.list() + session.messages() for the current project
+ *   to populate the rolling last-1h costEvents buffer used by lastHourUsage().
+ *   Only sets dailyCostUSD/dailyTokens if Track A failed (fallback path).
+ *   Math.max is kept here because the API can return an incomplete session
+ *   list under timing races at startup.
+ *
+ * Both tracks run in sequence. If Track A fails (binary absent, DB missing,
+ * query error), Track B's API totals are used instead (BUGFIX-133 behaviour).
+ *
+ * Called fire-and-forget from the plugin entry point so startup is never
+ * delayed or blocked.
  */
 async function backfillDailyUsage(client: PluginInput["client"]): Promise<void> {
   try {
     const today = todayUTC();
     const todayStartMs = new Date(today + "T00:00:00.000Z").getTime();
 
+    // ------------------------------------------------------------------
+    // Track A — cross-project daily totals via SQLite
+    // ------------------------------------------------------------------
+    let trackASucceeded = false;
+    // Wall-clock time when the Track A DB snapshot was taken. Used as the
+    // deduplication boundary for pendingLiveEvents replay: any message with
+    // time.completed <= trackASnapshotTime is in the DB snapshot already.
+    let trackASnapshotTime = 0;
+    try {
+      const cli = findOpencodeCli();
+      if (cli) {
+        // Get DB path
+        const pathResult = spawnSync(cli, ["db", "path"], { timeout: 3000, encoding: "utf8" });
+        const dbPath = pathResult.stdout?.trim();
+
+        if (dbPath && fs.existsSync(dbPath)) {
+          // Filter on message-level time.completed (not session.time_updated) so that
+          // cross-day sessions contribute only their today-messages to the daily total.
+          const sql = `
+            SELECT
+              ROUND(SUM(CAST(json_extract(data,'$.cost') AS REAL)), 6) AS costUSD,
+              SUM(
+                COALESCE(json_extract(data,'$.tokens.input'),0) +
+                COALESCE(json_extract(data,'$.tokens.output'),0) +
+                COALESCE(json_extract(data,'$.tokens.reasoning'),0) +
+                COALESCE(json_extract(data,'$.tokens.cache.read'),0) +
+                COALESCE(json_extract(data,'$.tokens.cache.write'),0)
+              ) AS tokens
+            FROM message
+            WHERE json_extract(data,'$.role') = 'assistant'
+              AND json_extract(data,'$.time.completed') IS NOT NULL
+              AND CAST(json_extract(data,'$.time.completed') AS INTEGER) >= ${todayStartMs}
+          `;
+          trackASnapshotTime = Date.now();
+          const queryResult = spawnSync(cli, ["db", "--format", "json", sql], {
+            timeout: 3000,
+            encoding: "utf8",
+          });
+
+          if (queryResult.status === 0 && queryResult.stdout) {
+            const rows = JSON.parse(queryResult.stdout.trim()) as Array<{ costUSD?: number; tokens?: number }>;
+            const dbCostUSD = typeof rows[0]?.costUSD === "number" ? rows[0].costUSD : 0;
+            const dbTokens  = typeof rows[0]?.tokens  === "number" ? rows[0].tokens  : 0;
+            checkDayRollover();
+            // DB is the single source of truth — assign directly, never Math.max.
+            // The sidecar value loaded at startup is discarded; the DB value wins.
+            // Math.max is intentionally NOT used here: the sidecar can hold an
+            // inflated value (e.g. accumulated by a bugged previous plugin run)
+            // and Math.max would preserve the poison. The DB always has the
+            // authoritative cross-project total.
+            dailyCostUSD = dbCostUSD;
+            dailyTokens  = dbTokens;
+            trackASucceeded = true;
+            // Immediately persist the correct DB value to the sidecar so that
+            // any other OpenCode window watching the file via fs.watch will pick
+            // up the authoritative total (instead of a stale inflated value).
+            dailyDate = today;
+            saveDailyUsage();
+          }
+        }
+      }
+    } catch { /* Track A failed — fall through to Track B for cost totals */ }
+
+    // ------------------------------------------------------------------
+    // Track B — current-project API loop for last-1h costEvents buffer
+    // ------------------------------------------------------------------
     const listResult = await client.session.list();
     const sessions = listResult.data ?? [];
 
@@ -272,17 +390,24 @@ async function backfillDailyUsage(client: PluginInput["client"]): Promise<void> 
     let backfilledTokens = 0;
     const oneHourAgo = Date.now() - 3_600_000;
     const backfilledEvents: TimestampedUsageEntry[] = [];
+    // Track ALL backfilled message timestamps (not just the last-1h subset)
+    // so latestBackfillTs reflects the true latest message across all of today.
+    let latestBackfillTsAll = 0;
 
     for (const s of todaySessions) {
       try {
         const msgResult = await client.session.messages({ path: { id: s.id } });
         const messages = msgResult.data ?? [];
-        const totals = sumCompletedAssistantUsage(messages);
-        backfilledCost   += totals.costUSD;
-        backfilledTokens += totals.tokens;
-        // Collect last-1h events from historical messages
+        if (!trackASucceeded) {
+          // Track A failed — use API totals as fallback for cost/token totals
+          const totals = sumCompletedAssistantUsage(messages);
+          backfilledCost   += totals.costUSD;
+          backfilledTokens += totals.tokens;
+        }
+        // Always collect timestamped entries for the last-1h rolling buffer.
         const timestamped = extractTimestampedUsage(messages);
         for (const e of timestamped) {
+          if (e.completedAt > latestBackfillTsAll) { latestBackfillTsAll = e.completedAt; }
           if (e.completedAt >= oneHourAgo) {
             backfilledEvents.push(e);
           }
@@ -290,23 +415,34 @@ async function backfillDailyUsage(client: PluginInput["client"]): Promise<void> 
       } catch { /* skip individual session errors — best-effort */ }
     }
 
-    // Set the daily totals from the authoritative API backfill result.
-    // Then replay any live events that arrived while backfill was in-flight
-    // (they were held in pendingLiveEvents to avoid double-counting here).
-    checkDayRollover();
+    // If Track A failed, apply Track B's API totals (current-project only fallback).
+    if (!trackASucceeded) {
+      checkDayRollover();
+      // Use Math.max against sidecarCostUSD (not dailyCostUSD which is 0 at this point)
+      // to handle the timing race where the API returns an incomplete session list.
+      // sidecarCostUSD is the value from the last plugin run and acts as a floor,
+      // but it is never seeded into dailyCostUSD pre-backfill to avoid propagating
+      // an inflated stale value into the live accumulator.
+      dailyCostUSD = Math.max(sidecarCostUSD, backfilledCost);
+      dailyTokens  = Math.max(sidecarTokens,  backfilledTokens);
+    }
 
-    // Start from the backfill total (truth from the API).
-    dailyCostUSD = backfilledCost;
-    dailyTokens  = backfilledTokens;
-
-    // Replay live events that occurred *after* the backfill data was fetched.
-    // Only events whose completedAt is AFTER the most recent backfilled message
-    // are truly new; the rest were already captured by the API scan.
-    const latestBackfillTs = backfilledEvents.length > 0
-      ? Math.max(...backfilledEvents.map(e => e.completedAt))
-      : 0;
+    // Replay live events that arrived before backfill completed.
+    // Deduplication boundary:
+    //   - Track A succeeded: use trackASnapshotTime (the wall-clock instant the
+    //     spawnSync DB query was issued). Any message with time.completed <=
+    //     trackASnapshotTime is guaranteed to be in the DB snapshot already —
+    //     regardless of which session it belongs to. Using latestBackfillTsAll
+    //     here would be wrong because Track B only iterates sessions with
+    //     time.updated >= todayStartMs, so cross-day sessions are excluded and
+    //     their message timestamps never update latestBackfillTsAll, causing
+    //     those messages to pass the guard and be double-counted on top of the
+    //     DB total that Track A already assigned.
+    //   - Track A failed: fall back to latestBackfillTsAll (Track B's max
+    //     message timestamp) as before.
+    const dedupeTs = trackASucceeded ? trackASnapshotTime : latestBackfillTsAll;
     for (const ev of pendingLiveEvents) {
-      if (ev.completedAt > latestBackfillTs) {
+      if (ev.completedAt > dedupeTs) {
         dailyCostUSD += ev.cost;
         dailyTokens  += ev.tokens;
         // Also add to costEvents buffer for last-1h tracking
@@ -558,12 +694,29 @@ let sessionTokens  = 0;
 /** How many assistant messages this session (drives local-pet evolution). */
 let localPetSessionMessages = 0;
 
-/** Running daily USD cost (loaded from sidecar, reset at UTC midnight). */
+/** Running daily USD cost (set by backfillDailyUsage on startup, reset at UTC midnight). */
 let dailyCostUSD = 0;
-/** Running daily token count (loaded from sidecar, reset at UTC midnight). */
+/** Running daily token count (set by backfillDailyUsage on startup, reset at UTC midnight). */
 let dailyTokens  = 0;
 /** UTC date string "YYYY-MM-DD" for the currently stored daily totals. */
 let dailyDate    = "";
+
+/**
+ * Sidecar values loaded at startup — kept separate from dailyCostUSD so that
+ * a stale/inflated sidecar cannot pre-poison the live accumulator.
+ * backfillDailyUsage() uses these as a floor for the Track B fallback only;
+ * Track A (SQLite) always overwrites them entirely and ignores sidecarCostUSD.
+ */
+let sidecarCostUSD = 0;
+let sidecarTokens  = 0;
+
+/**
+ * Set of message IDs already counted toward dailyCostUSD/dailyTokens this day.
+ * Prevents double-counting when message.updated fires multiple times for the
+ * same message (e.g. once per streaming chunk before the final completion).
+ * Cleared on UTC day rollover in checkDayRollover().
+ */
+const countedMessageIds = new Set<string>();
 
 /**
  * Set to true once backfillDailyUsage() has finished.
@@ -1066,13 +1219,18 @@ export const plugin: Plugin = async (ctx) => {
         if (raw.date !== todayUTC()) { return; }
         const fileCost   = typeof raw.costUSD === "number" ? raw.costUSD : 0;
         const fileTokens = typeof raw.tokens  === "number" ? raw.tokens  : 0;
-        // Take the maximum of what we know vs what another window wrote.
-        // This ensures no window's costs are lost, and no window shows a stale low value.
-        if (fileCost > dailyCostUSD || fileTokens > dailyTokens) {
-          dailyCostUSD = Math.max(dailyCostUSD, fileCost);
-          dailyTokens  = Math.max(dailyTokens,  fileTokens);
-          // Don't call saveDailyUsage() here — this is a read-only sync;
-          // the writing window already saved the correct value.
+        // Adopt the file value if it differs meaningfully from what we hold.
+        // We no longer use Math.max here — since Track A (SQLite) now immediately
+        // overwrites the sidecar with the authoritative DB value on every startup,
+        // the file always reflects the most accurate known total. Math.max would
+        // permanently lock in any inflated value that a previous bugged run wrote.
+        // Instead: accept the file value if it is larger than our current total
+        // (another window counted more messages than us), but also accept it if it
+        // is meaningfully *lower* (another window corrected the total via Track A).
+        // The threshold avoids thrashing on floating-point noise.
+        if (Math.abs(fileCost - dailyCostUSD) > 0.0001 || Math.abs(fileTokens - dailyTokens) > 10) {
+          dailyCostUSD = fileCost;
+          dailyTokens  = fileTokens;
         }
       } catch { /* best-effort */ }
     };
@@ -1602,14 +1760,24 @@ export const plugin: Plugin = async (ctx) => {
             return;
           }
          if (info?.role === "assistant" && typeof info.cost === "number") {
+            // Only count the final completion event — skip intermediate streaming
+            // chunks (those have time.completed = 0 or unset). Without this guard,
+            // every streaming update increments dailyCostUSD with a partial cost,
+            // causing the same message to be counted dozens of times.
+            const completedAt = typeof info.time?.completed === "number" ? info.time.completed : 0;
+            if (completedAt <= 0) { return; }   // still streaming — skip
+
+            // Deduplicate by message ID: message.updated can fire multiple times
+            // for the same message ID even after completion (e.g. metadata updates).
+            const msgId: string = typeof info.id === "string" ? info.id : "";
+            if (msgId && countedMessageIds.has(msgId)) { return; }
+            if (msgId) { countedMessageIds.add(msgId); }
+
             const t = (info.tokens?.input ?? 0) + (info.tokens?.output ?? 0)
                     + (info.tokens?.reasoning ?? 0)
                     + (info.tokens?.cache?.read ?? 0) + (info.tokens?.cache?.write ?? 0);
             sessionCostUSD += info.cost;
             sessionTokens  += t;
-            const completedAt = (typeof info.time?.completed === "number" && info.time.completed > 0)
-              ? info.time.completed
-              : Date.now();
             if (!backfillComplete) {
               // Backfill is still in-flight — hold this event to avoid double-counting.
               // It will be replayed (or discarded if already captured by backfill) once
