@@ -380,6 +380,12 @@ export interface GameConfig {
    * Set to 0 to allow the pet to die normally even in dev mode.
    */
   devModeHealthFloor: number;
+  /**
+   * When true, the pet can never die — the stat-decay death check and the
+   * senior old-age death roll are both skipped, independent of devMode
+   * (which also speeds up aging and is meant for testing, not permanent play).
+   */
+  immortal: boolean;
 }
 
 /** Sensible defaults used when no explicit config is provided. */
@@ -390,6 +396,17 @@ export const DEFAULT_GAME_CONFIG: GameConfig = {
   devMode:                  false,
   devModeAgingMultiplier:   10,
   devModeHealthFloor:       1,
+  immortal:                 false,
+};
+
+/**
+ * Config used by the claude-codotchi Claude Code plugin. Looked up by
+ * scripts/action.mjs, statusline.mjs, and the hooks via `LOCAL_PET_GAME_CONFIG
+ * ?? DEFAULT_GAME_CONFIG` — the pet living in Claude's own chat is immortal.
+ */
+export const LOCAL_PET_GAME_CONFIG: GameConfig = {
+  ...DEFAULT_GAME_CONFIG,
+  immortal: true,
 };
 
 /** Per-type stat multipliers applied on top of base config constants. */
@@ -944,7 +961,7 @@ const ZODIAC_ANIMALS = [
  */
 const ROTATION_ANIMALS = [
   "cat", "dog", "snake", "sheep", "classic",
-  "rooster", "tiger", "kangaroo",
+  "rooster", "tiger", "kangaroo", "dragon",
 ] as const;
 
 /**
@@ -1427,8 +1444,13 @@ export function tick(state: PetState, isIdle: boolean = false, isDeepIdle: boole
     health = config.devModeHealthFloor;
   }
 
+  // Immortal pets never drop below 1 health, so the bar never reads "0" while alive.
+  if (config.immortal && health < 1) {
+    health = 1;
+  }
+
   // Death check
-  if (health <= HEALTH_DEATH_THRESHOLD) {
+  if (!config.immortal && health <= HEALTH_DEATH_THRESHOLD) {
     alive = false;
     events.push("died");
     return withDerivedFields({
@@ -1472,7 +1494,7 @@ export function tick(state: PetState, isIdle: boolean = false, isDeepIdle: boole
   // Stage progression + old-age death/sickness rolls (once per day boundary for seniors)
   const afterStage = checkStageProgression(afterDecay);
   // ageDays is Math.floor(new dayTimer), computed above; state.ageDays is pre-tick value.
-  if (ageDays > state.ageDays) {
+  if (ageDays > state.ageDays && !config.immortal) {
     const afterDeath = rollOldAgeDeath(afterStage, Math.random());
     return afterDeath.alive ? rollOldAgeSickness(afterDeath, Math.random()) : afterDeath;
   }
@@ -1694,7 +1716,10 @@ export function startSnack(state: PetState, opts?: { maxPerCycle?: number }): Pe
  *
  * Called when the webview detects the pet touching the snack floor item.
  * Increments `consecutiveSnacks` and — if the new count reaches the maximum
- * — triggers sickness.
+ * — triggers sickness. Refused (no stat effects) if `snacksOnFloor` is
+ * already 0 — guards against a stale/duplicate `snack_consumed` report (e.g.
+ * a second open editor window sharing the same pet independently simulating
+ * the same floor item) applying the effect more than once.
  *
  * @param state - The current pet state.
  * @param opts - Optional per-character overrides.
@@ -1703,6 +1728,9 @@ export function startSnack(state: PetState, opts?: { maxPerCycle?: number }): Pe
  * @returns A new PetState after the action.
  */
 export function consumeSnack(state: PetState, opts?: { hungerMult?: number; sickThreshold?: number; weightGain?: number }): PetState {
+  if (state.snacksOnFloor <= 0) {
+    return withDerivedFields({ ...state, events: ["snack_refused"] });
+  }
   const hungerBoost = Math.round(FEED_SNACK_HUNGER_BOOST * (opts?.hungerMult ?? 1));
   const sickAt = opts?.sickThreshold ?? MAX_CONSECUTIVE_SNACKS_BEFORE_SICK;
   const events: string[] = [];
@@ -1737,7 +1765,7 @@ export function consumeSnack(state: PetState, opts?: { hungerMult?: number; sick
  * the engine's count stays in sync with the webview's empty `snackItems[]`.
  */
 export function resetFloorSnacks(state: PetState): PetState {
-  return withDerivedFields({ ...state, snacksOnFloor: 0 });
+  return withDerivedFields({ ...state, snacksOnFloor: 0, events: [] });
 }
 
 /**
@@ -1962,6 +1990,7 @@ export function giveMedicine(state: PetState): PetState {
       ...(answered ?? {}),
       sick: sick as boolean,
       medicineDosesGiven: 0,
+      consecutiveSnacks: 0,
       careMistakes: Math.max(0, state.careMistakes - (answered ? CARE_MISTAKE_ANSWER_CREDIT : 0)),
       events,
     });

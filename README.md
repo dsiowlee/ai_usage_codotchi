@@ -20,23 +20,23 @@ Available for **OpenCode** and **Claude Code**.
 
 ### Installation
 
-Download `opencode-codotchi-2.11.7.zip` from the
+Download `opencode-codotchi-2.16.7.zip` from the
 [Releases page](https://github.com/dsiowlee/ai_usage_codotchi/releases),
 extract it, then run the installer:
 
 **Windows (PowerShell):**
 
 ```powershell
-Expand-Archive opencode-codotchi-2.11.7.zip
-cd opencode-codotchi-2.11.7
+Expand-Archive opencode-codotchi-2.16.7.zip
+cd opencode-codotchi-2.16.7
 node bin/install.js --install
 ```
 
 **macOS / Linux:**
 
 ```bash
-unzip opencode-codotchi-2.11.7.zip
-cd opencode-codotchi-2.11.7
+unzip opencode-codotchi-2.16.7.zip
+cd opencode-codotchi-2.16.7
 node bin/install.js --install
 ```
 
@@ -60,7 +60,7 @@ greet you in a speech bubble on first startup.
 
 ### Installation
 
-Download `claude-codotchi-2.11.5.zip` from the
+Download `claude-codotchi-2.16.7.zip` from the
 [Releases page](https://github.com/dsiowlee/ai_usage_codotchi/releases),
 extract it, then run the installer script to get the exact commands for your
 machine:
@@ -68,16 +68,16 @@ machine:
 **Windows (PowerShell):**
 
 ```powershell
-Expand-Archive claude-codotchi-2.11.5.zip
-cd claude-codotchi-2.11.5
+Expand-Archive claude-codotchi-2.16.7.zip
+cd claude-codotchi-2.16.7
 .\install.ps1
 ```
 
 **macOS / Linux:**
 
 ```bash
-unzip claude-codotchi-2.11.5.zip
-cd claude-codotchi-2.11.5
+unzip claude-codotchi-2.16.7.zip
+cd claude-codotchi-2.16.7
 chmod +x install.sh && ./install.sh
 ```
 
@@ -106,7 +106,7 @@ Default thresholds: **$30 warn / $50 shout**. Configurable per plugin.
 
 ---
 
-## Current release: v2.11.7
+## Current release: v2.16.7
 
-- `opencode-codotchi-2.11.7.zip` — OpenCode plugin
-- `claude-codotchi-2.11.5.zip` — Claude Code plugin
+- `opencode-codotchi-2.16.7.zip` — OpenCode plugin
+- `claude-codotchi-2.16.7.zip` — Claude Code plugin

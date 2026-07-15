@@ -17,6 +17,7 @@ import {
   loadConfig,
   saveConfig,
   accumulateDailyUsage,
+  loadIDEStateFile,
 } from "./state.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -44,7 +45,7 @@ async function main() {
   const { ge, aa } = await loadEngine();
   const cfg = loadConfig();
   const now = Date.now();
-  const { costUsd: dailyCostUsd, tokens: dailyTokens } = accumulateDailyUsage(
+  const { costUsd: dailyCostUsd, tokens: dailyTokens, hourlyCostUsd, messageCount } = accumulateDailyUsage(
     process.env.CLAUDE_CODE_SESSION_ID
   );
 
@@ -59,6 +60,20 @@ async function main() {
       totalMessages: 0,
     };
   }
+
+  // Read VS Code and PyCharm pets — same live-window logic as opencode.
+  const LIVE_THRESHOLD_MS = 60_000;
+  const idePets = [];
+  for (const ide of ["vscode", "pycharm"]) {
+    if (file._anchor?.ide === ide) continue; // already the primary pet, don't peek at it too
+    const ideFile = loadIDEStateFile(ide);
+    if (!ideFile) { continue; }
+    const elapsed = (now - (ideFile.savedAt ?? 0)) / 1_000;
+    const ideState = ge.deserialiseState(ideFile.state);
+    idePets.push({ ide, state: ge.applyOfflineDecay(ideState, elapsed), savedAt: ideFile.savedAt ?? 0 });
+  }
+  idePets.sort((a, b) => b.savedAt - a.savedAt);
+  const livePets = idePets.filter(p => (now - p.savedAt) < LIVE_THRESHOLD_MS);
 
   const gameConfig = ge.LOCAL_PET_GAME_CONFIG ?? ge.DEFAULT_GAME_CONFIG;
   let message = "";
@@ -253,28 +268,36 @@ async function main() {
   const contextSpeech = aa.buildContextualSpeech(
     state, 0, 0, 0, file.totalMessages ?? 0, false,
     dailyCostUsd, dailyTokens,
-    cfg.warnThresholdUsd ?? 30, cfg.shoutThresholdUsd ?? 50
+    cfg.warnThresholdUsd ?? 30, cfg.shoutThresholdUsd ?? 50,
+    hourlyCostUsd, messageCount
   );
   const { bubbleColor, tierEmoji } = contextSpeech;
 
-  // Render output.
+  // Render output. ANSI is stripped because this text is ultimately relayed
+  // by the model into a markdown chat response (see BUGFIX-136), not printed
+  // to a raw terminal, so escape codes would appear as garbage and stray
+  // underscores in the art would be parsed as markdown emphasis.
   if (showArt && cfg.terminalEnabled !== false) {
-    const art = aa.buildStatusBlock(state);
-    if (message) {
-      const bubble = aa.buildSpeechBubble(
-        state.stage, state.mood, message,
-        state.name, state.spriteType,
-        undefined, bubbleColor, tierEmoji
+    // Just the art + speech bubble — no numeric stats block (see BUGFIX-137).
+    const bubble = aa.buildSpeechBubble(
+      state.stage, state.mood, message || contextSpeech.message,
+      state.name, state.spriteType,
+      undefined, bubbleColor, tierEmoji
+    );
+    process.stdout.write(aa.stripAnsi(bubble) + "\n");
+
+    // Also render any live IDE pets (VS Code / PyCharm) that are active.
+    for (const { ide, state: ideState } of livePets) {
+      const ideContext = aa.buildContextualSpeech(
+        ideState, 0, 0, 0, 0, false,
+        0, 0, cfg.warnThresholdUsd ?? 30, cfg.shoutThresholdUsd ?? 50, 0, 0
       );
-      process.stdout.write(bubble + "\n" + art + "\n");
-    } else {
-      // status action: show contextual speech bubble above stat block
-      const bubble = aa.buildSpeechBubble(
-        state.stage, state.mood, contextSpeech.message,
-        state.name, state.spriteType,
-        undefined, bubbleColor, tierEmoji
+      const ideBubble = aa.buildSpeechBubble(
+        ideState.stage, ideState.mood, ideContext.message,
+        ideState.name, ideState.spriteType,
+        undefined, ideContext.bubbleColor, ideContext.tierEmoji
       );
-      process.stdout.write(bubble + "\n" + art + "\n");
+      process.stdout.write(aa.stripAnsi(ideBubble) + "\n");
     }
   } else {
     if (message) process.stdout.write(message + "\n");

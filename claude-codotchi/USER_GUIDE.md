@@ -62,7 +62,7 @@ activates the statusline script, registers the event hooks, and makes the
 | **Coding rewards** | Every file write / edit boosts your pet's happiness and discipline (throttled to once per 10 s) |
 | **Session hooks** | Pet greets you on session start and says farewell when the session stops |
 | **Slash command** | `/codotchi <action>` for all care actions |
-| **Daily cost tracking** | Pet speech bubble colour reflects today's Claude API spend |
+| **Daily cost tracking** | Pet speech bubble colour reflects today's Claude API spend, with hourly rate |
 
 ---
 
@@ -70,7 +70,7 @@ activates the statusline script, registers the event hooks, and makes the
 
 | Action | Description |
 |--------|-------------|
-| `/codotchi` or `/codotchi status` | Show the pet's current ASCII art and full stats |
+| `/codotchi` or `/codotchi status` | Show the pet's ASCII art and speech bubble |
 | `/codotchi feed` | Give a meal — restores hunger (max 3 meals per wake cycle) |
 | `/codotchi pat` | Pat the pet — gentle happiness boost |
 | `/codotchi sleep` | Put the pet to sleep — energy regenerates 3× faster while sleeping |
@@ -96,6 +96,8 @@ calls today (UTC day):
 | Below warn threshold | Green | Cheerful |
 | Warn → shout threshold | Yellow | Concerned |
 | Above shout threshold | Red | ALL CAPS alarm |
+
+The speech bubble also appends a **hourly rate** (e.g. `$1.20/hr`) based on spend in the past 60 minutes, so you can spot runaway sessions at a glance.
 
 Default thresholds: **$30 warn / $50 shout**. Change them any time:
 

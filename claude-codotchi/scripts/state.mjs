@@ -34,8 +34,8 @@ export function statePath() {
   return path.join(dataDir(), "codotchi-state.json");
 }
 
-/** Load and return the saved file object, or null if not found / corrupt. */
-export function loadStateFile() {
+/** Read the local wrapper file directly, or null if not found / corrupt. */
+function readLocalStateFile() {
   const p = statePath();
   if (!fs.existsSync(p)) return null;
   try {
@@ -45,11 +45,93 @@ export function loadStateFile() {
   }
 }
 
-/** Save the file object (must include { state, savedAt, terminalEnabled, createdDate, totalMessages }). */
+/**
+ * Load the pet state to use. Prefers whichever of VS Code/PyCharm's shared
+ * state is most recently active (see resolveCanonicalPetPath below) so the
+ * Claude Code terminal shows the same pet as those IDEs instead of its own
+ * separate one. Metadata fields with no equivalent in the shared IDE file
+ * format (terminalEnabled, createdDate, totalMessages, lastCodeActivityAt,
+ * lastPetSpeechAt) always come from the local wrapper file regardless of
+ * where the pet identity itself comes from.
+ *
+ * Falls back to the local file (or null, if none exists yet — callers then
+ * create a fresh pet) when neither IDE has any usable state. That local
+ * pet is never written anywhere VS Code/PyCharm would discover it.
+ */
+export function loadStateFile() {
+  const local = readLocalStateFile();
+  const anchor = resolveCanonicalPetPath();
+  if (!anchor) return local;
+
+  return {
+    state: anchor.state,
+    savedAt: anchor.savedAt,
+    terminalEnabled: local?.terminalEnabled ?? true,
+    createdDate: local?.createdDate ?? new Date().toISOString().slice(0, 10),
+    totalMessages: local?.totalMessages ?? 0,
+    lastCodeActivityAt: local?.lastCodeActivityAt,
+    lastPetSpeechAt: local?.lastPetSpeechAt,
+    _anchor: { ide: anchor.ide, filePath: anchor.filePath },
+  };
+}
+
+/**
+ * Save the file object (must include { state, savedAt, terminalEnabled, createdDate, totalMessages }).
+ *
+ * Always writes the full object to the local wrapper file first — an
+ * unconditional private mirror/backup. No resolver ever scans this file, so
+ * this is what keeps a pet with no active IDE anchor from becoming
+ * accidentally discoverable.
+ *
+ * Then, if this object came from (or resolves to) an IDE anchor, also writes
+ * the shared `{state, savedAt}` shape back to that same anchor file, so
+ * edits made via Claude Code (feed, pat, etc.) are reflected in VS Code /
+ * PyCharm too. Skipped for a dead pet, mirroring the guard both
+ * vscode/src/persistence.ts and CodotchiPersistence.kt already apply before
+ * publishing to their shared file.
+ *
+ * Reuses the anchor recorded on `obj._anchor` (set by loadStateFile) rather
+ * than re-resolving from scratch — a consumer that does slow I/O between
+ * load and save (e.g. hook-post-tool.mjs's periodic-speech branch) could
+ * otherwise have the anchor drift mid-invocation and write into the wrong
+ * IDE's file.
+ *
+ * Note: if VS Code/PyCharm is open and focused, its own tick loop ignores
+ * external changes to its state file while ticking, so this write-back can
+ * be silently overwritten within a few seconds. That's an accepted, existing
+ * characteristic of this merge model (claude-desktop-codotchi and
+ * opencode-codotchi's write-backs have the same exposure), not a bug.
+ */
 export function saveStateFile(obj) {
   const dir = dataDir();
   ensureDir(dir);
   fs.writeFileSync(statePath(), JSON.stringify(obj, null, 2), "utf8");
+
+  if (!obj.state || obj.state.alive === false) return;
+
+  let anchor = obj._anchor;
+  if (!anchor) {
+    const resolved = resolveCanonicalPetPath();
+    anchor = resolved ? { ide: resolved.ide, filePath: resolved.filePath } : null;
+  }
+  if (!anchor) return;
+
+  try {
+    let currentState = null;
+    try {
+      currentState = JSON.parse(fs.readFileSync(anchor.filePath, "utf8")).state;
+    } catch { /* missing/corrupt — treat as changed, write fresh below */ }
+    if (currentState && JSON.stringify(currentState) === JSON.stringify(obj.state)) return;
+
+    ensureDir(path.dirname(anchor.filePath));
+    fs.writeFileSync(
+      anchor.filePath,
+      JSON.stringify({ state: obj.state, savedAt: Date.now() }, null, 2),
+      "utf8"
+    );
+  } catch {
+    // Best-effort write-back — swallow errors, matching persistence.ts / CodotchiPersistence.kt.
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -99,7 +181,7 @@ function pricingForModel(model = "") {
  * Read current session's cumulative token usage from its JSONL transcript.
  * Returns { costUsd, tokens } for the session so far.
  */
-export function readSessionUsage(sessionId) {
+export function readSessionUsage(sessionId, date = null) {
   if (!sessionId) return { costUsd: 0, tokens: 0 };
   const projsDir = path.join(os.homedir(), ".claude", "projects");
   let jsonlPath = null;
@@ -118,6 +200,7 @@ export function readSessionUsage(sessionId) {
       try {
         const d = JSON.parse(line);
         if (d.type !== "assistant" || !d.message?.usage) continue;
+        if (date && d.timestamp && !d.timestamp.startsWith(date)) continue;
         const u = d.message.usage;
         const p = pricingForModel(d.message.model ?? "");
         const inp = u.input_tokens ?? 0;
@@ -139,7 +222,8 @@ export function readSessionUsage(sessionId) {
 function scanAllDailyUsage() {
   const projsDir = path.join(os.homedir(), ".claude", "projects");
   const today = new Date().toISOString().slice(0, 10);
-  let costUsd = 0, tokens = 0;
+  const oneHourAgo = new Date(Date.now() - 3_600_000).toISOString();
+  let costUsd = 0, tokens = 0, hourlyCostUsd = 0, messageCount = 0;
   try {
     for (const proj of fs.readdirSync(projsDir)) {
       const projPath = path.join(projsDir, proj);
@@ -164,21 +248,27 @@ function scanAllDailyUsage() {
               const out = u.output_tokens ?? 0;
               const cr  = u.cache_read_input_tokens ?? 0;
               const cc  = u.cache_creation_input_tokens ?? 0;
-              costUsd += (inp * p.input + out * p.output + cr * p.cacheRead + cc * p.cacheWrite) / 1_000_000;
+              const entryCost = (inp * p.input + out * p.output + cr * p.cacheRead + cc * p.cacheWrite) / 1_000_000;
+              costUsd += entryCost;
               tokens  += inp + out + cr + cc;
+              messageCount += 1;
+              if (d.timestamp && d.timestamp >= oneHourAgo) hourlyCostUsd += entryCost;
             } catch { /* skip malformed lines */ }
           }
         } catch {}
       }
     }
   } catch {}
-  return { costUsd, tokens };
+  return { costUsd, tokens, hourlyCostUsd, messageCount };
 }
 
 /**
  * Accumulate today's cost and tokens from the current session's JSONL transcript.
  * sessionId defaults to CLAUDE_CODE_SESSION_ID env var.
- * Returns { costUsd, tokens } — both accumulated across all sessions today.
+ * Returns { costUsd, tokens, hourlyCostUsd, messageCount } — all accumulated across
+ * all sessions today. messageCount is the number of completed assistant turns today
+ * (including sub-agent/Task turns) — used to compute a tokens-per-message average
+ * for display instead of the raw cumulative token total.
  *
  * Uses a read-modify-write-verify pattern to guard against the race condition
  * where two concurrent Claude Code windows both read the file, compute their
@@ -188,74 +278,10 @@ function scanAllDailyUsage() {
 export function accumulateDailyUsage(sessionId) {
   // Back-compat: callers may pass a stdinJson object — ignore it.
   if (sessionId && typeof sessionId === "object") sessionId = undefined;
-  sessionId = sessionId ?? process.env.CLAUDE_CODE_SESSION_ID;
-
-  // No session ID — fall back to scanning all project JSONLs for today.
-  if (!sessionId) {
-    return scanAllDailyUsage();
-  }
-
-  const { costUsd: currentCost, tokens: currentTokens } = readSessionUsage(sessionId);
-
-  const today = new Date().toISOString().slice(0, 10);
-
-  // ----- attempt 1 -----
-  const daily = loadDaily();
-  if (!daily[today]) daily[today] = { costUsd: 0, tokens: 0, sessions: {} };
-  const todayEntry = daily[today];
-  if (todayEntry.tokens == null) todayEntry.tokens = 0;
-
-  const prevEntry = todayEntry.sessions[sessionId];
-  const prevCost   = typeof prevEntry === "object" ? (prevEntry.lastCostUsd  ?? 0) : (prevEntry ?? 0);
-  const prevTokens = typeof prevEntry === "object" ? (prevEntry.lastTokens   ?? 0) : 0;
-
-  const costDelta   = Math.max(0, currentCost   - prevCost);
-  const tokenDelta  = Math.max(0, currentTokens - prevTokens);
-
-  todayEntry.sessions[sessionId] = { lastCostUsd: currentCost, lastTokens: currentTokens };
-  todayEntry.costUsd = (todayEntry.costUsd || 0) + costDelta;
-  todayEntry.tokens  = (todayEntry.tokens  || 0) + tokenDelta;
-
-  saveDaily(daily);
-
-  // ----- verify: guard against concurrent-write clobber -----
-  // Re-read immediately; if our session entry was overwritten by a concurrent
-  // write from another window, apply the delta to the freshly-read file and
-  // save once more.  One retry is sufficient — the odds of a second collision
-  // within milliseconds are negligible.
-  try {
-    const verify = loadDaily();
-    const vEntry = verify[today]?.sessions?.[sessionId];
-    const savedCost = typeof vEntry === "object" ? (vEntry.lastCostUsd ?? 0) : (vEntry ?? 0);
-    if (savedCost !== currentCost) {
-      // Our write was clobbered — repair
-      if (!verify[today]) verify[today] = { costUsd: 0, tokens: 0, sessions: {} };
-      const vToday = verify[today];
-      if (vToday.tokens == null) vToday.tokens = 0;
-      const vPrev = vToday.sessions[sessionId];
-      const vPrevCost   = typeof vPrev === "object" ? (vPrev.lastCostUsd ?? 0) : (vPrev ?? 0);
-      const vPrevTokens = typeof vPrev === "object" ? (vPrev.lastTokens  ?? 0) : 0;
-      const vCostDelta   = Math.max(0, currentCost   - vPrevCost);
-      const vTokenDelta  = Math.max(0, currentTokens - vPrevTokens);
-      vToday.sessions[sessionId] = { lastCostUsd: currentCost, lastTokens: currentTokens };
-      vToday.costUsd = (vToday.costUsd || 0) + vCostDelta;
-      vToday.tokens  = (vToday.tokens  || 0) + vTokenDelta;
-      saveDaily(verify);
-      // Return from the repaired file
-      if (vToday.costUsd === 0 && vToday.tokens === 0) {
-        return scanAllDailyUsage();
-      }
-      return { costUsd: vToday.costUsd, tokens: vToday.tokens };
-    }
-  } catch { /* best-effort verify — don't block on repair failure */ }
-
-  // If per-session tracking has no data yet (new session or JSONL not found),
-  // fall back to scanning all project JSONLs so we always show something.
-  if (todayEntry.costUsd === 0 && todayEntry.tokens === 0) {
-    return scanAllDailyUsage();
-  }
-
-  return { costUsd: todayEntry.costUsd, tokens: todayEntry.tokens };
+  // Always read directly from today's JSONL files — bypasses the checkpoint/delta
+  // accumulator in codotchi-daily.json which produced inflated values when
+  // sessions spanned UTC midnight or when the daily JSON had stale state.
+  return scanAllDailyUsage();
 }
 
 /** @deprecated Use accumulateDailyUsage instead. */
@@ -292,4 +318,119 @@ export function saveConfig(cfg) {
   const dir = dataDir();
   ensureDir(dir);
   fs.writeFileSync(configPath(), JSON.stringify(cfg, null, 2), "utf8");
+}
+
+// ---------------------------------------------------------------------------
+// IDE state file helpers (VS Code / PyCharm)
+// ---------------------------------------------------------------------------
+
+/** Platform-specific base directory for all codotchi IDE state files. */
+export function getIDEBase() {
+  return process.platform === "win32"
+    ? process.env["APPDATA"] ?? path.join(os.homedir(), "AppData", "Roaming")
+    : path.join(os.homedir(), ".config");
+}
+
+/**
+ * Scans `getIDEBase()/codotchi/<ide>/` for state.json files in the global
+ * (flat) location and in any 12-char lowercase-hex subdirectory (per-
+ * workspace/per-project hashes written by the VS Code extension and the
+ * PyCharm plugin — see persistence.ts / CodotchiPersistence.kt). Returns all
+ * found candidates, sorted newest-first by mtime.
+ */
+function collectIDECandidates(ide) {
+  const base = path.join(getIDEBase(), "codotchi", ide);
+  const global = path.join(base, "state.json");
+  const candidates = [];
+  try {
+    if (fs.existsSync(global)) {
+      candidates.push({ filePath: global, ide, mtime: fs.statSync(global).mtimeMs });
+    }
+    if (fs.existsSync(base)) {
+      for (const entry of fs.readdirSync(base, { withFileTypes: true })) {
+        if (entry.isDirectory() && /^[0-9a-f]{12}$/.test(entry.name)) {
+          const candidate = path.join(base, entry.name, "state.json");
+          if (fs.existsSync(candidate)) {
+            candidates.push({ filePath: candidate, ide, mtime: fs.statSync(candidate).mtimeMs });
+          }
+        }
+      }
+    }
+  } catch { /* ignore — return whatever was collected before the error */ }
+  candidates.sort((a, b) => b.mtime - a.mtime);
+  return candidates;
+}
+
+/**
+ * Returns the VS Code state file path to use: the most-recently-modified of
+ * the flat (global) file or any per-workspace hash subdirectory file. Falls
+ * back to the flat path (even if it doesn't exist yet) so callers have
+ * somewhere to write a fresh pet.
+ */
+export function resolveVSCodeStatePath() {
+  const global = path.join(getIDEBase(), "codotchi", "vscode", "state.json");
+  const candidates = collectIDECandidates("vscode");
+  return candidates.length > 0 ? candidates[0].filePath : global;
+}
+
+/**
+ * Returns the PyCharm state file path to use, mirroring
+ * resolveVSCodeStatePath(): the most-recently-modified of the flat (global)
+ * file or any per-project hash subdirectory file. PyCharm writes the same
+ * 12-char-hex scheme as VS Code (see CodotchiPersistence.kt) — previously
+ * only the flat path was checked here, missing per-project pets.
+ */
+export function resolvePyCharmStatePath() {
+  const global = path.join(getIDEBase(), "codotchi", "pycharm", "state.json");
+  const candidates = collectIDECandidates("pycharm");
+  return candidates.length > 0 ? candidates[0].filePath : global;
+}
+
+/**
+ * Load a VS Code or PyCharm state file.
+ * Returns the parsed file object (with `state` and `savedAt`) or null.
+ */
+export function loadIDEStateFile(ide) {
+  let filePath;
+  if (ide === "vscode") {
+    filePath = resolveVSCodeStatePath();
+  } else if (ide === "pycharm") {
+    filePath = resolvePyCharmStatePath();
+  } else {
+    return null;
+  }
+  if (!fs.existsSync(filePath)) return null;
+  try {
+    return JSON.parse(fs.readFileSync(filePath, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Finds the canonical pet identity for claude-codotchi to merge with: the
+ * most-recently-modified state file across both VS Code and PyCharm (flat +
+ * per-workspace/per-project hash subdirectories), skipping over any
+ * candidate with missing or corrupt/partial JSON in favour of the
+ * next-newest one.
+ *
+ * Returns `{ filePath, ide, state, savedAt }` for the first valid candidate,
+ * or `null` if neither IDE has any usable state at all — callers should fall
+ * back to claude-codotchi's own private local pet in that case.
+ */
+export function resolveCanonicalPetPath() {
+  const candidates = [
+    ...collectIDECandidates("vscode"),
+    ...collectIDECandidates("pycharm"),
+  ].sort((a, b) => b.mtime - a.mtime);
+
+  for (const { filePath, ide } of candidates) {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(filePath, "utf8"));
+      if (parsed && parsed.state) {
+        return { filePath, ide, state: parsed.state, savedAt: parsed.savedAt };
+      }
+    } catch { /* corrupt/partial — try the next-newest candidate */ }
+  }
+  return null;
 }
