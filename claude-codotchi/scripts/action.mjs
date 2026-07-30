@@ -3,7 +3,7 @@
  *
  * Usage: node action.mjs <action> [value|name]
  *
- * Actions: status feed pat sleep wake clean medicine on off rename warnthreshold shoutthreshold orangethreshold redthreshold levels speechinterval
+ * Actions: status feed pat sleep wake clean medicine on off rename warnthreshold shoutthreshold orangethreshold redthreshold levels speechinterval emoji
  *
  * Prints ANSI art + status block or plain confirmation text to stdout.
  * Claude Code surfaces this output as the slash command result.
@@ -231,6 +231,34 @@ async function main() {
       break;
     }
 
+    case "emoji": {
+      const arg = (valueArg ?? "").trim();
+      if (!arg) {
+        const modeLabel = cfg.statuslineMode === "emoji" ? "emoji" : "full";
+        const emojiLabel = cfg.statuslineEmoji ? cfg.statuslineEmoji : "auto";
+        message = `Usage: /codotchi emoji <emoji|auto|off>  (current: ${modeLabel}, emoji: ${emojiLabel})`;
+        showArt = false;
+      } else if (arg.toLowerCase() === "off" || arg.toLowerCase() === "full") {
+        cfg.statuslineMode = "full";
+        saveConfig(cfg);
+        message = "Statusline set back to the full ASCII pet.";
+        showArt = false;
+      } else if (arg.toLowerCase() === "auto") {
+        cfg.statuslineMode = "emoji";
+        cfg.statuslineEmoji = null;
+        saveConfig(cfg);
+        message = "Statusline emoji will auto-match your pet.";
+        showArt = false;
+      } else {
+        cfg.statuslineMode = "emoji";
+        cfg.statuslineEmoji = arg;
+        saveConfig(cfg);
+        message = `Statusline emoji set to ${arg}.`;
+        showArt = false;
+      }
+      break;
+    }
+
     case "speechinterval": {
       if (valueArg === "off" || valueArg === "0") {
         cfg.petSpeechIntervalMs = 0;
@@ -278,13 +306,16 @@ async function main() {
   // to a raw terminal, so escape codes would appear as garbage and stray
   // underscores in the art would be parsed as markdown emphasis.
   if (showArt && cfg.terminalEnabled !== false) {
-    // Just the art + speech bubble — no numeric stats block (see BUGFIX-137).
-    const bubble = aa.buildSpeechBubble(
-      state.stage, state.mood, message || contextSpeech.message,
-      state.name, state.spriteType,
-      undefined, bubbleColor, tierEmoji
-    );
-    process.stdout.write(aa.stripAnsi(bubble) + "\n");
+    // Only show the local Claude Code pet when no IDE pet is live — it is a
+    // fallback placeholder and should be suppressed while an IDE extension is active.
+    if (livePets.length === 0) {
+      const bubble = aa.buildSpeechBubble(
+        state.stage, state.mood, message || contextSpeech.message,
+        state.name, state.spriteType,
+        undefined, bubbleColor, tierEmoji
+      );
+      process.stdout.write(aa.stripAnsi(bubble) + "\n");
+    }
 
     // Also render any live IDE pets (VS Code / PyCharm) that are active.
     for (const { ide, state: ideState } of livePets) {

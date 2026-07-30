@@ -168,6 +168,19 @@ export const IDLE_DEEP_THRESHOLD_SECONDS: number = 600; // 10 minutes
 export const IDLE_STAT_FLOOR: number = 20;
 
 /**
+ * Event names that report health loss. When the idle safety floor fully
+ * absorbs a tick's computed damage (net health unchanged), these are
+ * stripped from the tick's events so logging/notifications don't claim the
+ * pet is losing health when it isn't (follow-up to BUGFIX-149).
+ */
+const HEALTH_DAMAGE_EVENTS = new Set([
+  "starvation_damage",
+  "unhappiness_damage",
+  "exhaustion_damage",
+  "sickness_damage",
+]);
+
+/**
  * When the user is idle, hunger and happiness decay at this fraction of the
  * normal rate (applied by skipping decay on most ticks — 1 in every
  * IDLE_DECAY_TICK_DIVISOR ticks actually decays).
@@ -1144,6 +1157,7 @@ export function tick(state: PetState, isIdle: boolean = false, isDeepIdle: boole
   let nextPoopIntervalTicks: number = state.nextPoopIntervalTicks;
   let hungerZeroTicks: number = state.hungerZeroTicks;
   let sick: boolean = state.sick;
+  let tookDamageThisTick: boolean = false;
   let alive: boolean = state.alive;
   let sleeping: boolean = state.sleeping;
   let ageDays: number = state.ageDays;
@@ -1212,12 +1226,6 @@ export function tick(state: PetState, isIdle: boolean = false, isDeepIdle: boole
     if (happinessDecayTick) happiness = clampStat(happiness - 1);
     // Energy uses a fixed interval (no per-type multiplier) — throttled by idle (BUGFIX-014)
     if (energyDecayTick)    energy    = clampStat(energy - ENERGY_DECAY_PER_TICK);
-    // Deep idle: floor stats at IDLE_STAT_FLOOR so they never drop below 20%
-    if (isDeepIdle) {
-      hunger    = Math.max(hunger,    IDLE_STAT_FLOOR);
-      happiness = Math.max(happiness, IDLE_STAT_FLOOR);
-      health    = Math.max(health,    IDLE_STAT_FLOOR);
-    }
   } else {
     const energyRegen = ENERGY_REGEN_PER_TICK_SLEEPING * modifiers.energyRegenMultiplier;
     energy = clampStat(energy + energyRegen);
@@ -1299,26 +1307,27 @@ export function tick(state: PetState, isIdle: boolean = false, isDeepIdle: boole
     hungerZeroTicks = 0;
   }
 
-  // Starvation damage — also triggers sickness so medicine can cure it
+  // Starvation damage — no longer triggers sickness. Sickness is now only
+  // caused by a dirty environment (poop) or overfeeding (snacks), so a pet
+  // left hungry takes health damage but must not become "sick" from it.
   if (hungerZeroTicks >= HUNGER_ZERO_TICKS_BEFORE_RISK) {
     health = clampStat(health - CRITICAL_HEALTH_DAMAGE_PER_TICK);
     events.push("starvation_damage");
-    if (!sick) {
-      sick = true;
-      events.push("became_sick");
-    }
+    tookDamageThisTick = true;
   }
 
-  // Happiness-critical health drain
+  // Happiness-critical health drain — does not cause sickness (see above).
   if (happiness === STAT_MIN && !sleeping) {
     health = clampStat(health - CRITICAL_HEALTH_DAMAGE_PER_TICK);
     events.push("unhappiness_damage");
+    tookDamageThisTick = true;
   }
 
   // Energy-exhaustion health drain (slower than hunger/happiness critical)
   if (energy === STAT_MIN && !sleeping) {
     health = clampStat(health - EXHAUSTION_HEALTH_DAMAGE_PER_TICK);
     events.push("exhaustion_damage");
+    tookDamageThisTick = true;
   }
 
   // Sickness health drain — BUGFIX-040: suppressed during deep idle so a pet
@@ -1332,6 +1341,7 @@ export function tick(state: PetState, isIdle: boolean = false, isDeepIdle: boole
     const sickDmg = isIdle ? IDLE_SICK_DAMAGE_PER_TICK : CRITICAL_HEALTH_DAMAGE_PER_TICK;
     health = clampStat(health - sickDmg);
     events.push("sickness_damage");
+    tookDamageThisTick = true;
   }
 
   // BUGFIX-004: passive health regen — full rate while sleeping, much slower awake
@@ -1437,6 +1447,29 @@ export function tick(state: PetState, isIdle: boolean = false, isDeepIdle: boole
     }
   }
   } // end if (config.attentionCallsEnabled)
+
+  // Idle safety floor — while idle (regular or deep) and the pet is sick or took
+  // damage this tick, prevent hunger/happiness/health/energy from decaying below
+  // IDLE_STAT_FLOOR this tick. Applied last, after every stat-decay and damage
+  // block above, so a same-tick damage source can never push a stat back below
+  // the floor. The floor is capped at each stat's value entering this tick, so a
+  // stat already below IDLE_STAT_FLOOR (e.g. from earlier exhaustion) is never
+  // raised back up — it only stops *this tick's* decay from crossing the floor.
+  if ((isIdle || isDeepIdle) && (sick || tookDamageThisTick)) {
+    hunger    = Math.max(hunger,    Math.min(state.hunger,    IDLE_STAT_FLOOR));
+    happiness = Math.max(happiness, Math.min(state.happiness, IDLE_STAT_FLOOR));
+    health    = Math.max(health,    Math.min(state.health,    IDLE_STAT_FLOOR));
+    energy    = Math.max(energy,    Math.min(state.energy,    IDLE_STAT_FLOOR));
+
+    // If the floor above fully absorbed this tick's health loss (net health
+    // unchanged), drop the damage events pushed earlier this tick so idle
+    // logging/notifications don't claim the pet is losing health when it isn't.
+    if (health === state.health) {
+      for (let i = events.length - 1; i >= 0; i--) {
+        if (HEALTH_DAMAGE_EVENTS.has(events[i])) events.splice(i, 1);
+      }
+    }
+  }
 
   // Dev mode: configurable health floor — prevents death from stat decay or old age
   // when devModeHealthFloor > 0 (default 1). Set floor to 0 to allow death in dev mode.
@@ -2298,9 +2331,10 @@ export function applyOfflineDecay(state: PetState, elapsedSeconds: number): PetS
   return withDerivedFields({
     ...state,
     // Being offline is equivalent to deep idle: apply the same IDLE_STAT_FLOOR
-    // so offline decay can never push stats below the deep-idle floor of 20.
-    hunger:    Math.max(decayedHunger,    IDLE_STAT_FLOOR),
-    happiness: Math.max(decayedHappiness, IDLE_STAT_FLOOR),
+    // so offline decay can never push stats below the deep-idle floor of 20 —
+    // but never raise a stat that was already below the floor before going offline.
+    hunger:    Math.max(decayedHunger,    Math.min(state.hunger,    IDLE_STAT_FLOOR)),
+    happiness: Math.max(decayedHappiness, Math.min(state.happiness, IDLE_STAT_FLOOR)),
     // Reset the starvation streak counter: offline time breaks the continuity
     // of consecutive zero-hunger ticks.  Without this reset the pet could die
     // on the very first tick after VS Code reopens.

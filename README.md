@@ -14,29 +14,31 @@ Available for **OpenCode** and **Claude Code**.
 
 | Feature | Description |
 |---------|-------------|
-| **Statusline pet** | Multiline ANSI ASCII art renders in the statusline, refreshes every 10 seconds |
-| **`/codotchi` slash command** | Control your pet directly from Claude Code |
-| **Daily cost tracking** | Pet speech bubble colour reflects today's Claude API spend |
+| **Tick loop** | Pet advances every 6 s via a background timer |
+| **Event hooks** | Reacts to file edits (coding reward), session idle, and server connect |
+| **`/codotchi` slash command** | Control your pet directly from OpenCode |
+| **ASCII art renderer** | 30 frames (6 stages × 5 moods), ANSI-coloured speech bubbles, status bars |
+| **Daily cost tracking** | Pet speech bubble colour reflects today's OpenCode API spend |
 
 ### Installation
 
-Download `opencode-codotchi-2.16.7.zip` from the
+Download `opencode-codotchi-2.18.0.zip` from the
 [Releases page](https://github.com/dsiowlee/ai_usage_codotchi/releases),
 extract it, then run the installer:
 
 **Windows (PowerShell):**
 
 ```powershell
-Expand-Archive opencode-codotchi-2.16.7.zip
-cd opencode-codotchi-2.16.7
+Expand-Archive opencode-codotchi-2.18.0.zip
+cd opencode-codotchi-2.18.0
 node bin/install.js --install
 ```
 
 **macOS / Linux:**
 
 ```bash
-unzip opencode-codotchi-2.16.7.zip
-cd opencode-codotchi-2.16.7
+unzip opencode-codotchi-2.18.0.zip
+cd opencode-codotchi-2.18.0
 node bin/install.js --install
 ```
 
@@ -54,13 +56,14 @@ greet you in a speech bubble on first startup.
 | Feature | Description |
 |---------|-------------|
 | **Statusline pet** | Multiline ANSI ASCII art renders in the statusline, refreshes every 10 seconds |
+| **Coding rewards** | Every file write/edit boosts your pet's happiness and discipline |
 | **Session hooks** | Pet greets you on session start and says farewell when the session stops |
 | **`/codotchi` slash command** | Control your pet directly from Claude Code |
 | **Daily cost tracking** | Pet speech bubble colour reflects today's Claude API spend |
 
 ### Installation
 
-Download `claude-codotchi-2.16.7.zip` from the
+Download `claude-codotchi-2.18.4.zip` from the
 [Releases page](https://github.com/dsiowlee/ai_usage_codotchi/releases),
 extract it, then run the installer script to get the exact commands for your
 machine:
@@ -68,16 +71,16 @@ machine:
 **Windows (PowerShell):**
 
 ```powershell
-Expand-Archive claude-codotchi-2.16.7.zip
-cd claude-codotchi-2.16.7
+Expand-Archive claude-codotchi-2.18.4.zip
+cd claude-codotchi-2.18.4
 .\install.ps1
 ```
 
 **macOS / Linux:**
 
 ```bash
-unzip claude-codotchi-2.16.7.zip
-cd claude-codotchi-2.16.7
+unzip claude-codotchi-2.18.4.zip
+cd claude-codotchi-2.18.4
 chmod +x install.sh && ./install.sh
 ```
 
@@ -106,7 +109,7 @@ Default thresholds: **$30 warn / $50 shout**. Configurable per plugin.
 
 ---
 
-## Current release: v2.16.7
+## Current release: v2.18.0
 
-- `opencode-codotchi-2.16.7.zip` — OpenCode plugin
-- `claude-codotchi-2.16.7.zip` — Claude Code plugin
+- `opencode-codotchi-2.18.0.zip` — OpenCode plugin
+- `claude-codotchi-2.18.4.zip` — Claude Code plugin
