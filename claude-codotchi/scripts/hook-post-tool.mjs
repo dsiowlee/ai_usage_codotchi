@@ -65,13 +65,20 @@ async function main() {
           state, 0, 0, 0, file.totalMessages ?? 0, false,
           dailyCostUsd, dailyTokens,
           cfg.warnThresholdUsd ?? 30, cfg.shoutThresholdUsd ?? 50,
-          0, messageCount
+          0, /*lastHourTokens*/ 0, messageCount, { costStyle: "hourlyRate" }
         );
         const rawBubble = aa.buildSpeechBubble(
           state.stage, state.mood, speech.message, state.name, state.spriteType
         );
-        systemMessage = aa.stripAnsi(rawBubble);
+        const candidate = aa.stripAnsi(rawBubble);
         file.lastPetSpeechAt = now;
+        if (candidate !== (file.lastPetSpeechMessage ?? "")) {
+          systemMessage = candidate;
+          file.lastPetSpeechMessage = candidate;
+          file.lastPetSpeechCount = 1;
+        } else {
+          file.lastPetSpeechCount = (file.lastPetSpeechCount ?? 1) + 1;
+        }
       } catch {}
     }
   }

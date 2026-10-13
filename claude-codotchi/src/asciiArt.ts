@@ -1,7 +1,10 @@
+// GENERATED from packages/core/src/asciiArt.ts by scripts/sync-core.mjs — do not edit here.
+// Edit packages/core/src/asciiArt.ts, then run: node scripts/sync-core.mjs
 /**
  * asciiArt.ts
  *
- * Terminal ASCII art renderer for the codotchi OpenCode plugin.
+ * Terminal ASCII art renderer shared by the codotchi terminal plugins
+ * (OpenCode, Claude Code and Claude Desktop).
  *
  * Provides:
  *   - Stage-specific ASCII art (egg → baby → child → teen → adult → senior)
@@ -24,7 +27,6 @@ const DIM    = "\x1b[2m";
 const FG_CYAN    = "\x1b[36m";
 const FG_GREEN   = "\x1b[32m";
 const FG_YELLOW  = "\x1b[33m";
-const FG_ORANGE  = "\x1b[38;5;208m";
 const FG_RED     = "\x1b[31m";
 const FG_BLUE    = "\x1b[34m";
 const FG_MAGENTA = "\x1b[35m";
@@ -385,7 +387,7 @@ const SPRITE_HEAD: Record<string, Record<string, string>> = {
     adult:  "  n(-_-)n    ",
     senior: "  n(-_-)n    ",
   },
-  goat: {
+  sheep: {
     baby:   "    V(^.^)V  ",
     child:  "  V(-_-)V    ",
     teen:   "  V(-_-)V    ",
@@ -419,6 +421,34 @@ const SPRITE_HEAD: Record<string, Record<string, string>> = {
     teen:   "  o(-_-)o    ",
     adult:  "  o(-_-)o    ",
     senior: "  o(-_-)o    ",
+  },
+  kangaroo: {
+    baby:   "    d(^.^)b  ",
+    child:  "  d(-_-)b    ",
+    teen:   "  d(-_-)b    ",
+    adult:  "  d(-_-)b    ",
+    senior: "  d(-_-)b    ",
+  },
+  roo: {
+    baby:   "    d(^.^)b  ",
+    child:  "  d(-_-)b    ",
+    teen:   "  d(-_-)b    ",
+    adult:  "  d(-_-)b    ",
+    senior: "  d(-_-)b    ",
+  },
+  tim: {
+    baby:   "    [(^.^)]  ",
+    child:  "  [(-_-)]    ",
+    teen:   "  [(-_-)]    ",
+    adult:  "  [(-_-)]    ",
+    senior: "  [(-_-)]    ",
+  },
+  stu: {
+    baby:   "    #(^.^)#  ",
+    child:  "  #(-_-)#    ",
+    teen:   "  #(-_-)#    ",
+    adult:  "  #(-_-)#    ",
+    senior: "  #(-_-)#    ",
   },
 };
 // ---------------------------------------------------------------------------
@@ -623,13 +653,21 @@ export function buildSpeechBubble(
 // ---------------------------------------------------------------------------
 
 /** Render a single stat bar of the form:  Label [████░░░░] 72 */
+/** Display names for sprites whose ID differs from the character name. */
+const SPRITE_LABELS: Record<string, string> = { stu: "Stugotchi" };
+
+/** Human-readable sprite name, e.g. "stu" → "Stugotchi", "cat" → "Cat". */
+export function spriteLabel(spriteType: string): string {
+  return SPRITE_LABELS[spriteType] ?? spriteType.charAt(0).toUpperCase() + spriteType.slice(1);
+}
+
 function statBar(label: string, value: number, barWidth = 10): string {
   const filled = Math.round((value / 100) * barWidth);
   const empty  = barWidth - filled;
   const barColour = value >= 50 ? FG_GREEN : value >= 25 ? FG_YELLOW : FG_RED;
   const bar = colour("█".repeat(filled), barColour) + colour("░".repeat(empty), FG_GRAY);
   const labelPad = label.padEnd(12, " ");
-  return `  ${FG_CYAN}${labelPad}${RESET}[${bar}] ${value}`;
+  return `  ${FG_CYAN}${labelPad}${RESET}[${bar}] ${Math.round(value)}`;
 }
 
 /**
@@ -662,7 +700,7 @@ export function buildStatusBlock(state: {
     `${BOLD}${stageColour}${state.name}${RESET}`,
     `${FG_GRAY}Stage   : ${RESET}${state.stage}`,
     ...(state.spriteType && state.spriteType !== "classic"
-      ? [`${FG_GRAY}Sprite  : ${RESET}${state.spriteType}`]
+      ? [`${FG_GRAY}Sprite  : ${RESET}${spriteLabel(state.spriteType)}`]
       : []),
     `${FG_GRAY}Age     : ${RESET}${state.ageDays} day${state.ageDays !== 1 ? "s" : ""}`,
     `${FG_GRAY}Mood    : ${RESET}${state.mood}`,
@@ -724,6 +762,51 @@ export function formatCost(usd: number): string {
   return `$${usd.toFixed(2)}`;
 }
 
+/** Options for buildContextualSpeech(). */
+export interface ContextualSpeechOptions {
+  /** "lastHour" (default, OpenCode wording) or "hourlyRate" (Claude Code wording). */
+  costStyle?: "lastHour" | "hourlyRate";
+  /** Keep the cost-tier remarks and colours but leave out the $ / token figures (shown elsewhere). */
+  remarksOnly?: boolean;
+  /** Clock used for time-of-day lines (remarksOnly only). Defaults to now. */
+  now?: Date;
+}
+
+/** Extra situational bubble lines used when remarksOnly is set. */
+export const SITUATION_LINES = {
+  chat10: ["We're deep in the weeds now.", "Still with you. Mostly."],
+  chat25: ["Is this still the same task?", "I've lost count. Kidding. Mostly."],
+  files15: ["That's a lot of files. Commit soon?", "Big diff energy."],
+  files30: ["Are we rewriting everything?", "The reviewer is going to need a coffee."],
+  session1h: ["An hour in. Stretch?"],
+  session3h: ["Three hours. Water break?"],
+  session5h: ["I'm tired and I'm just a pixel."],
+  quiet: ["Thinking or snacking?", "Planning the next move?"],
+  prod: ["Main branch. Tread lightly.", "Careful, this one ships."],
+  morning: ["Coffee first?"],
+  midday: ["Lunch break yet?", "Post-lunch slump? Push through."],
+  evening: ["Clocking off soon?", "Overtime? Bold.", "Dinner first, bugs later."],
+  general: ["I believe in this code.", "Ship it? Maybe after a test.", "Have you tried turning it off and on?", "I'm just here for moral support."],
+} as const;
+
+/** Spend remarks (no figures) per cost tier, used when remarksOnly is set. */
+export const SPEND_REMARKS = {
+  green: ["Running a tab.", "Ticking along.", "Tokens well spent so far.", "Meter's running, but we're fine.", "Spending like a sensible adult.", "The wallet barely noticed.", "Still in snack money territory."],
+  yellow: ["Getting spendy.", "The tab's adding up.", "Easy on the tokens.", "The meter's spinning a bit fast.", "Is this worth the tokens? Probably. Maybe.", "Your wallet just sighed."],
+  red: ["CHECK YOUR USAGE!", "THIS IS GETTING EXPENSIVE!", "WHO'S PAYING FOR ALL THIS?!", "THE METER IS ON FIRE!", "I CAN HEAR THE CREDIT CARD CRYING!", "THIS COSTS MORE THAN MY FOOD!", "ARE WE BUILDING A ROCKET?!"],
+} as const;
+
+/** Lines that fit the current files / session length / time of day, plus the any-time lines. */
+export function situationalLines(filesEdited: number, sessionMs: number, now: Date): string[] {
+  const out: string[] = [...SITUATION_LINES.general];
+  if (filesEdited >= 30) { out.push(...SITUATION_LINES.files30); } else if (filesEdited >= 15) { out.push(...SITUATION_LINES.files15); }
+  const hours = sessionMs / 3_600_000;
+  if (hours >= 5) { out.push(...SITUATION_LINES.session5h); } else if (hours >= 3) { out.push(...SITUATION_LINES.session3h); } else if (hours >= 1) { out.push(...SITUATION_LINES.session1h); }
+  const h = now.getHours();
+  if (h < 9) { out.push(...SITUATION_LINES.morning); } else if (h >= 12 && h < 14) { out.push(...SITUATION_LINES.midday); } else if (h >= 17) { out.push(...SITUATION_LINES.evening); }
+  return out;
+}
+
 /**
  * Build a contextual speech line combining pet mood and coding session activity.
  *
@@ -743,6 +826,11 @@ export function formatCost(usd: number): string {
  *                              a number comparable to the model's context window, unlike the
  *                              unbounded daily sum. Falls back to the raw dailyTokens total when
  *                              dailyMessages is 0 (e.g. before the first message of the day).
+ * @param lastHourCostUSD     - USD spent in the last hour. Shown as "(… last 1h)" in the
+ *                              default style, or as the " $X/hr" rate in the hourlyRate style.
+ * @param lastHourTokens      - Tokens used in the last hour (reserved; not shown yet).
+ * @param opts.costStyle      - "lastHour" (default; OpenCode wording) or "hourlyRate"
+ *                              (Claude Code wording: 🟢/🟡/🔴 lights and a $X/hr suffix).
  */
 export function buildContextualSpeech(
   pet: {
@@ -766,8 +854,10 @@ export function buildContextualSpeech(
   dailyTokens: number = 0,
   costWarnThreshold: number = 30,
   costShoutThreshold: number = 50,
-  hourlyCostUSD: number = 0,
+  lastHourCostUSD: number = 0,
+  lastHourTokens: number = 0,
   dailyMessages: number = 0,
+  opts: ContextualSpeechOptions = {},
 ): { message: string; bubbleColor: string; tierEmoji: string } {
   // --- Session activity phrase ---
   const sessionMins = Math.floor(sessionMs / 60_000);
@@ -787,38 +877,41 @@ export function buildContextualSpeech(
 
   const idleMins = timeSinceLastEditMs > 0 ? Math.floor(timeSinceLastEditMs / 60_000) : 0;
 
+  // remarksOnly callers (the OpenCode bubble) get extra situational lines mixed in.
+  const more = (base: string[], extra: readonly string[]): string[] => (opts.remarksOnly ? [...base, ...extra] : base);
+
   // --- Build the contextual phrase (no early returns — cost suffix always appended below) ---
   let phrase: string;
 
   if (isOnProdBranch && filesEdited > 0) {
     // Contextual override: prod branch
-    phrase = pickRandom([
+    phrase = pickRandom(more([
       `${filesEdited} files on main. Make sure these are clean.`,
       `Shipping to prod. Double-check everything.`,
       `Production branch. No pressure... okay, some pressure.`,
-    ]);
+    ], SITUATION_LINES.prod));
   } else if (idleMins >= 60) {
     // Contextual override: long idle
-    phrase = pickRandom([
+    phrase = pickRandom(more([
       `No files touched in over an hour. Thinking things through?`,
       `Long pause. Still here if you need me.`,
-    ]);
+    ], SITUATION_LINES.quiet));
   } else if (idleMins >= 30) {
-    phrase = pickRandom([
+    phrase = pickRandom(more([
       `It's been ${idleMins} minutes since the last edit. Taking a break?`,
       `Quiet spell. Ready when you are.`,
-    ]);
+    ], SITUATION_LINES.quiet));
   } else if (sessionUserMessages >= 20) {
     // Contextual override: lots of prompting
-    phrase = pickRandom([
+    phrase = pickRandom(more([
       `${sessionUserMessages} messages deep. You're really working through something.`,
       `Long conversation. I'm keeping up.`,
-    ]);
+    ], sessionUserMessages >= 25 ? SITUATION_LINES.chat25 : SITUATION_LINES.chat10));
   } else if (sessionUserMessages >= 10) {
-    phrase = pickRandom([
+    phrase = pickRandom(more([
       `${sessionUserMessages} messages in. Good back-and-forth.`,
       `We're getting somewhere. Keep going.`,
-    ]);
+    ], SITUATION_LINES.chat10));
   } else if (sessionUserMessages >= 5) {
     phrase = pickRandom([
       `${sessionUserMessages} prompts sent. Getting into it.`,
@@ -852,7 +945,7 @@ export function buildContextualSpeech(
     } else {
       moodPhrase = "Doing okay. Let's see what you build.";
     }
-    phrase = `${moodPhrase} ${activityPhrase}`;
+    phrase = `${moodPhrase} ${opts.remarksOnly ? pickRandom([activityPhrase, ...situationalLines(filesEdited, sessionMs, opts.now ?? new Date())]) : activityPhrase}`;
   }
 
   // --- Daily cost / token suffix — always appended regardless of which phrase was chosen ---
@@ -861,17 +954,39 @@ export function buildContextualSpeech(
   // (e.g. ~300k) instead of growing unbounded across the whole day. Falls back to the raw
   // total when dailyMessages is 0 (e.g. before the first message of the day is counted).
   const avgTokensPerMessage = dailyMessages > 0 ? dailyTokens / dailyMessages : dailyTokens;
+  const hourlyRate = opts.costStyle === "hourlyRate";
+  // hourlyRate style prefixes every usage line with its tier light.
+  const light = (emoji: string): string => (hourlyRate ? `${emoji} ` : "");
+
+  if (opts.remarksOnly) {
+    if (dailyCostUSD >= costShoutThreshold) {
+      return { message: colour(`${phrase} ${pickRandom([...SPEND_REMARKS.red])}`.toUpperCase(), FG_RED), bubbleColor: FG_RED, tierEmoji: "🔴" };
+    }
+    if (dailyCostUSD >= costWarnThreshold) {
+      return { message: `${phrase} ${colour(pickRandom([...SPEND_REMARKS.yellow]), FG_YELLOW)}`, bubbleColor: FG_YELLOW, tierEmoji: "🟡" };
+    }
+    const casual = dailyCostUSD > 0 || dailyTokens > 0 ? pickRandom([...SPEND_REMARKS.green]) : "";
+    return { message: casual ? `${phrase} ${casual}` : phrase, bubbleColor: FG_GREEN, tierEmoji: "🟢" };
+  }
 
   if (dailyCostUSD > 0) {
     const costStr   = formatCost(dailyCostUSD);
     const tokStr    = formatTokens(avgTokensPerMessage);
     const tokStrUp  = tokStr.toUpperCase();
-    const hourlyStr = hourlyCostUSD > 0 ? ` ${formatCost(hourlyCostUSD)}/hr` : "";
+    // lastHour style: "(… last 1h)" after the daily cost. hourlyRate style:
+    // " $X/hr" at the end of the line. Both only when there's data.
+    const hasHour = lastHourCostUSD > 0;
+    const hourCostStr = hasHour ? formatCost(lastHourCostUSD) : "";
+    const hour1hFrag = !hourlyRate && hasHour ? ` (${hourCostStr} last 1h)` : "";
+    const hour1hFragUp = hour1hFrag.toUpperCase();
+    const hourlyStr = hourlyRate && hasHour ? ` ${hourCostStr}/hr` : "";
     const hourlyStrUp = hourlyStr.toUpperCase();
 
     if (dailyCostUSD >= costShoutThreshold) {
       // ALL CAPS shouting tier — red border + red text
-      const shoutSuffix = `🔴 ${costStr} TODAY — CHECK YOUR USAGE! (AVERAGING ${tokStrUp} TOKENS PER MESSAGE${hourlyStrUp})`;
+      const shoutSuffix = hourlyRate
+        ? `🔴 ${costStr} TODAY — CHECK YOUR USAGE! (AVERAGING ${tokStrUp} TOKENS PER MESSAGE${hourlyStrUp})`
+        : `🚨 ${costStr} TODAY${hour1hFragUp} — CHECK YOUR USAGE! (AVERAGING ${tokStrUp} TOKENS PER MESSAGE)`;
       return {
         message: colour(`${phrase} ${shoutSuffix}`.toUpperCase(), FG_RED),
         bubbleColor: FG_RED,
@@ -879,7 +994,9 @@ export function buildContextualSpeech(
       };
     } else if (dailyCostUSD >= costWarnThreshold) {
       // Warning tier — yellow border + yellow cost suffix
-      const warnSuffix = `🟡 ${costStr} today — getting spendy.${hourlyStr} (averaging ${tokStr} tokens per message)`;
+      const warnSuffix = hourlyRate
+        ? `🟡 ${costStr} today — getting spendy.${hourlyStr} (averaging ${tokStr} tokens per message)`
+        : `⚠️ ${costStr} today${hour1hFrag} — getting spendy. (averaging ${tokStr} tokens per message)`;
       return {
         message: `${phrase} ${colour(warnSuffix, FG_YELLOW)}`,
         bubbleColor: FG_YELLOW,
@@ -887,13 +1004,21 @@ export function buildContextualSpeech(
       };
     } else {
       // Normal tier — green border + casual mention
-      const normalSuffix = pickRandom([
-        `🟢 ${costStr} today, averaging ${tokStr} tokens per message.${hourlyStr}`,
-        `🟢 Running a tab — ${costStr}, averaging ${tokStr} tokens per message.${hourlyStr}`,
-        `🟢 ${costStr} spent, averaging ${tokStr} tokens per message.${hourlyStr}`,
-        `🟢 Racked up ${costStr}, averaging ${tokStr} tokens per message.${hourlyStr}`,
-        `🟢 Ticking along at ${costStr}, averaging ${tokStr} tokens per message.${hourlyStr}`,
-      ]);
+      const normalSuffix = hourlyRate
+        ? pickRandom([
+            `🟢 ${costStr} today, averaging ${tokStr} tokens per message.${hourlyStr}`,
+            `🟢 Running a tab — ${costStr}, averaging ${tokStr} tokens per message.${hourlyStr}`,
+            `🟢 ${costStr} spent, averaging ${tokStr} tokens per message.${hourlyStr}`,
+            `🟢 Racked up ${costStr}, averaging ${tokStr} tokens per message.${hourlyStr}`,
+            `🟢 Ticking along at ${costStr}, averaging ${tokStr} tokens per message.${hourlyStr}`,
+          ])
+        : pickRandom([
+            `${costStr} today${hour1hFrag} — averaging ${tokStr} tokens per message.`,
+            `Running a tab — ${costStr}${hour1hFrag}, averaging ${tokStr} tokens per message.`,
+            `${costStr} spent${hour1hFrag}, averaging ${tokStr} tokens per message.`,
+            `Racked up ${costStr}${hour1hFrag}, averaging ${tokStr} tokens per message.`,
+            `Ticking along at ${costStr}${hour1hFrag}, averaging ${tokStr} tokens per message.`,
+          ]);
       return {
         message: `${phrase} ${normalSuffix}`,
         bubbleColor: FG_GREEN,
@@ -904,9 +1029,9 @@ export function buildContextualSpeech(
     // Token-only tier — free/local model, no cost to report — green border
     const tokStr = formatTokens(avgTokensPerMessage);
     const tokenOnlySuffix = pickRandom([
-      `🟢 Averaging ${tokStr} tokens per message today.`,
-      `🟢 Running on ${tokStr} tokens per message so far.`,
-      `🟢 Averaging ${tokStr} tokens per message.`,
+      `${light("🟢")}Averaging ${tokStr} tokens per message today.`,
+      `${light("🟢")}Running on ${tokStr} tokens per message so far.`,
+      `${light("🟢")}Averaging ${tokStr} tokens per message.`,
     ]);
     return {
       message: `${phrase} ${tokenOnlySuffix}`,
@@ -915,8 +1040,8 @@ export function buildContextualSpeech(
     };
   }
 
-  // No cost/tokens at all — green border, no usage light
-  return { message: phrase, bubbleColor: FG_GREEN, tierEmoji: "" };
+  // No cost/tokens at all — green border (hourlyRate style shows no usage light)
+  return { message: phrase, bubbleColor: FG_GREEN, tierEmoji: hourlyRate ? "" : "🟢" };
 }
 
 /**
@@ -924,6 +1049,117 @@ export function buildContextualSpeech(
  */
 export function pickRandom<T>(arr: T[]): T {
   return arr[Math.floor(Math.random() * arr.length)];
+}
+
+// ---------------------------------------------------------------------------
+// Attention calls
+// ---------------------------------------------------------------------------
+
+/** What an attention call looks like in the terminal plugins. */
+export interface AttentionCallText {
+  /** Speech-bubble phrases; one is picked each time the call is shown. */
+  phrases: string[];
+  /** Mood key for the pet art next to the bubble. */
+  mood: string;
+  /** Short "wants …" label for one-line displays (emoji / plain status line). */
+  label: string;
+  /** How to answer it from the terminal, or "" if it must be answered in the IDE. */
+  command: string;
+}
+
+/**
+ * Text for every attention call, keyed by the `attention_call_<key>` event
+ * suffix. A craving has two keys, `craving_meal` and `craving_snack`, picked by
+ * `PetState.cravingFood` (see attentionCallKey).
+ */
+export const ATTENTION_CALL_TEXT: Record<string, AttentionCallText> = {
+  hunger: {
+    phrases: ["I'm so hungry... please feed me!", "Running on empty. Feed me soon!", "Really need food right now."],
+    mood: "sad", label: "food", command: "/codotchi feed",
+  },
+  unhappiness: {
+    phrases: ["I want to play", "Getting lonely over here.", "Need some attention."],
+    mood: "sad", label: "attention", command: "/codotchi play",
+  },
+  sick: {
+    phrases: ["I don't feel well. I need medicine!", "Feeling sick... please give me medicine.", "Medicine please!"],
+    mood: "sick", label: "medicine", command: "/codotchi medicine",
+  },
+  critical_health: {
+    phrases: ["My health is critical! Please help me!", "I'm in rough shape. Need help!", "Critical health — please help."],
+    mood: "sick", label: "help", command: "/codotchi medicine",
+  },
+  low_energy: {
+    phrases: ["I'm exhausted... let me sleep!", "Nearly out of energy. Need to rest.", "So tired... let me sleep."],
+    mood: "sad", label: "sleep", command: "/codotchi sleep",
+  },
+  poop: {
+    phrases: ["There is a mess here! Can you clean it up?", "It's getting messy. Please clean!", "Could use a clean-up in here."],
+    mood: "sad", label: "a clean-up", command: "/codotchi clean",
+  },
+  gift: {
+    phrases: ["I brought you a gift! Praise me in the IDE to accept it.", "I have a surprise for you! (Praise me in the IDE.)", "Got something for you — praise me in the IDE to collect."],
+    mood: "happy", label: "praise (gift)", command: "",
+  },
+  break: {
+    phrases: ["You've been at it for 30 minutes — remember to take a break! Praise me in the IDE and I'll nap for 5 minutes while you rest.", "Time for a break! Stretch, grab some water. (Praise me in the IDE.)", "Half an hour already! Take a break — praise me in the IDE and we'll both rest."],
+    mood: "neutral", label: "praise (take a break)", command: "",
+  },
+  misbehaviour: {
+    phrases: ["I'm acting up! Scold me in the IDE to discipline me.", "I need some discipline. (Scold me in the IDE.)", "Being difficult. (Scold me in the IDE.)"],
+    mood: "neutral", label: "discipline", command: "",
+  },
+  play: {
+    phrases: ["Play a game with me! (/codotchi play)", "I'm bored — let's play! (/codotchi play)", "Game time? /codotchi play"],
+    mood: "happy", label: "a game", command: "/codotchi play",
+  },
+  pat: {
+    phrases: ["I want a pat! (/codotchi pat)", "Pat me? Pretty please! (/codotchi pat)", "A little pat would be nice. (/codotchi pat)"],
+    mood: "happy", label: "a pat", command: "/codotchi pat",
+  },
+  craving_meal: {
+    phrases: ["I'm craving a proper meal! (/codotchi feed)", "Feed me? A real meal, please. (/codotchi feed)", "Could really go for a meal. (/codotchi feed)"],
+    mood: "neutral", label: "a meal", command: "/codotchi feed",
+  },
+  craving_snack: {
+    phrases: ["I'm craving a snack! (/codotchi snack)", "Snack time? (/codotchi snack)", "Just a little snack... (/codotchi snack)"],
+    mood: "happy", label: "a snack", command: "/codotchi snack",
+  },
+};
+
+/**
+ * Map an active call (`PetState.activeAttentionCall`) to its ATTENTION_CALL_TEXT
+ * key. A craving becomes `craving_meal` or `craving_snack`; the default is meal.
+ */
+export function attentionCallKey(call: string, cravingFood?: string | null): string {
+  if (call === "craving") { return cravingFood === "snack" ? "craving_snack" : "craving_meal"; }
+  return call;
+}
+
+/**
+ * Speech for an attention call, or null for an unknown key.
+ *
+ * @param key       - ATTENTION_CALL_TEXT key (use attentionCallKey for an active call).
+ * @param pickIndex - Which phrase to use (wraps round). Omit for a random one;
+ *                    pass a stable value so a redrawn display doesn't flicker.
+ */
+export function attentionCallSpeech(
+  key: string,
+  pickIndex?: number
+): { message: string; mood: string; label: string; command: string; bubbleColor: string } | null {
+  const text = ATTENTION_CALL_TEXT[key];
+  if (!text) { return null; }
+  const message = pickIndex === undefined
+    ? pickRandom(text.phrases)
+    : text.phrases[Math.abs(Math.floor(pickIndex)) % text.phrases.length];
+  const urgent = key === "sick" || key === "critical_health";
+  return {
+    message,
+    mood: text.mood,
+    label: text.label,
+    command: text.command,
+    bubbleColor: urgent ? FG_RED : FG_YELLOW,
+  };
 }
 
 /**
